@@ -2,8 +2,10 @@ import streamlit as st
 import streamlit.components.v1 as components
 import requests
 
+# 페이지 기본 설정
 st.set_page_config(page_title="ORCID 데이터 수집 및 미리보기", page_icon="🔍", layout="wide")
 
+# API 키 설정 (보안 적용)
 try:
     CLIENT_ID = st.secrets["ORCID_CLIENT_ID"]
     CLIENT_SECRET = st.secrets["ORCID_CLIENT_SECRET"]
@@ -12,12 +14,41 @@ except KeyError:
     st.stop()
 
 st.title("🔍 ORCID 데이터 수집 및 웹 미리보기")
-st.markdown("수집된 원본 메타데이터를 ORCID 공식 홈페이지와 유사한 UI로 렌더링합니다.")
+st.markdown("버튼을 선택하여 원본 JSON 데이터를 수집하거나, 공식 홈페이지 형태의 웹 미리보기를 확인할 수 있습니다.")
 
+# 검색어 입력
 orcid_id = st.text_input("수집할 ORCID iD 입력", "0009-0009-9177-9083")
 
+# ==========================================
+# 1. 공통 함수: ORCID API 호출
+# ==========================================
+def fetch_orcid_data(orcid_id):
+    auth_resp = requests.post(
+        'https://orcid.org/oauth/token',
+        headers={'Accept': 'application/json'},
+        data={
+            'client_id': CLIENT_ID,
+            'client_secret': CLIENT_SECRET,
+            'grant_type': 'client_credentials',
+            'scope': '/read-public'
+        }
+    )
+    auth_resp.raise_for_status()
+    access_token = auth_resp.json().get('access_token')
+
+    headers = {
+        'Accept': 'application/json',
+        'Authorization': f'Bearer {access_token}'
+    }
+    resp = requests.get(f'https://pub.orcid.org/v3.0/{orcid_id}', headers=headers)
+    resp.raise_for_status()
+    return resp.json()
+
+# ==========================================
+# 2. 공통 함수: JSON 데이터 파싱
+# ==========================================
 def parse_orcid_metadata(data):
-    # 1. 이름 추출
+    # 이름 추출
     name = "Name Not Available"
     try:
         person = data.get("person", {}).get("name", {})
@@ -27,7 +58,7 @@ def parse_orcid_metadata(data):
             name = f"{given} {family}".strip()
     except Exception: pass
 
-    # 2. Employment (소속/경력) 추출
+    # 소속/경력 추출
     employments = []
     try:
         emp_groups = data.get("activities-summary", {}).get("employments", {}).get("affiliation-group", [])
@@ -36,7 +67,6 @@ def parse_orcid_metadata(data):
                 emp = summary.get("employment-summary", {})
                 org = emp.get("organization", {}).get("name", "Unknown Organization")
                 
-                # 주소 조합
                 addr = emp.get("organization", {}).get("address", {})
                 city = addr.get("city", "")
                 country = addr.get("country", "")
@@ -45,7 +75,6 @@ def parse_orcid_metadata(data):
                 
                 role = emp.get("role-title", "")
                 
-                # 기간 조합
                 start = emp.get("start-date", {}) or {}
                 start_y = start.get("year", {}).get("value", "") if start.get("year") else ""
                 start_m = start.get("month", {}).get("value", "") if start.get("month") else ""
@@ -66,7 +95,7 @@ def parse_orcid_metadata(data):
                 })
     except Exception: pass
 
-    # 3. Works (연구 성과) 추출
+    # 연구 성과 추출
     works = []
     try:
         work_groups = data.get("activities-summary", {}).get("works", {}).get("group", [])
@@ -95,6 +124,9 @@ def parse_orcid_metadata(data):
 
     return {"name": name, "employments": employments, "works": works}
 
+# ==========================================
+# 3. 공통 함수: HTML 렌더링
+# ==========================================
 def render_orcid_html(parsed, orcid_id):
     html_content = f'''
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 1000px; margin: auto; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
@@ -175,48 +207,46 @@ def render_orcid_html(parsed, orcid_id):
     '''
     return html_content
 
-if st.button("데이터 수집 및 미리보기 렌더링"):
+
+# ==========================================
+# 4. 화면 UI (버튼 2개 분리)
+# ==========================================
+col1, col2 = st.columns(2)
+
+with col1:
+    btn_json = st.button("수집 JSON", use_container_width=True)
+
+with col2:
+    btn_preview = st.button("웹 미리보기", use_container_width=True)
+
+st.divider()
+
+# JSON 버튼 클릭 시 동작
+if btn_json:
     if not orcid_id.strip():
         st.warning("ORCID iD를 정확히 입력해 주세요.")
     else:
-        with st.spinner("ORCID API 호출 및 복합 메타데이터 구조 파싱 중..."):
+        with st.spinner("JSON 데이터 수집 중..."):
             try:
-                auth_resp = requests.post(
-                    'https://orcid.org/oauth/token',
-                    headers={'Accept': 'application/json'},
-                    data={
-                        'client_id': CLIENT_ID,
-                        'client_secret': CLIENT_SECRET,
-                        'grant_type': 'client_credentials',
-                        'scope': '/read-public'
-                    }
-                )
-                auth_resp.raise_for_status()
-                access_token = auth_resp.json().get('access_token')
-
-                if access_token:
-                    headers = {
-                        'Accept': 'application/json',
-                        'Authorization': f'Bearer {access_token}'
-                    }
-                    resp = requests.get(f'https://pub.orcid.org/v3.0/{orcid_id}', headers=headers)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    
-                    # 깊은 뎁스의 JSON 파싱
-                    parsed_data = parse_orcid_metadata(data)
-                    preview_html = render_orcid_html(parsed_data, orcid_id)
-                    
-                    st.success("데이터 수집 및 파싱 완료!")
-                    
-                    # 1. 렌더링된 미리보기 출력
-                    st.subheader("🌐 ORCID 웹 미리보기")
-                    components.html(preview_html, height=800, scrolling=True)
-                    
-                    # 2. 원본 JSON
-                    with st.expander("원본 JSON 전체 구조 확인"):
-                        st.json(data)
-                else:
-                    st.error("Access Token 발급 실패")
+                data = fetch_orcid_data(orcid_id)
+                st.success("데이터 수집 완료!")
+                st.subheader("원본 JSON 데이터")
+                st.json(data)
             except Exception as e:
-                st.error(f"오류 발생: {e}")
+                st.error(f"데이터 수집 중 오류가 발생했습니다: {e}")
+
+# 웹 미리보기 버튼 클릭 시 동작
+if btn_preview:
+    if not orcid_id.strip():
+        st.warning("ORCID iD를 정확히 입력해 주세요.")
+    else:
+        with st.spinner("웹 미리보기 렌더링 중..."):
+            try:
+                data = fetch_orcid_data(orcid_id)
+                parsed_data = parse_orcid_metadata(data)
+                preview_html = render_orcid_html(parsed_data, orcid_id)
+                st.success("렌더링 완료!")
+                st.subheader("🌐 ORCID 웹 미리보기")
+                components.html(preview_html, height=800, scrolling=True)
+            except Exception as e:
+                st.error(f"미리보기 생성 중 오류가 발생했습니다: {e}")
