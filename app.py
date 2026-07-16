@@ -17,8 +17,8 @@ except KeyError:
 st.title("🔍 ORCID 데이터 수집 및 웹 미리보기")
 st.markdown("버튼을 선택하여 원본 JSON 데이터를 수집하거나, 공식 홈페이지 형태의 웹 미리보기를 확인할 수 있습니다.")
 
-# 검색어 입력
-orcid_id = st.text_input("수집할 ORCID iD 입력", "0009-0009-9177-9083")
+# 검색어 입력 (새로운 테스트 ORCID iD를 기본값으로 설정)
+orcid_id = st.text_input("수집할 ORCID iD 입력", "0000-0001-8783-5884")
 
 # ==========================================
 # 1. 공통 함수: ORCID API 호출
@@ -46,7 +46,7 @@ def fetch_orcid_data(orcid_id):
     return resp.json()
 
 # ==========================================
-# 2. 공통 함수: JSON 데이터 파싱
+# 2. 공통 함수: JSON 데이터 파싱 모듈화
 # ==========================================
 def format_date(timestamp_ms):
     """ORCID의 ms 단위 타임스탬프를 YYYY-MM-DD 형식으로 변환"""
@@ -56,109 +56,257 @@ def format_date(timestamp_ms):
     except:
         return ""
 
-def parse_orcid_metadata(data):
-    # 이름 추출
-    name = "Name Not Available"
+def extract_affiliations(data, activity_type, summary_key):
+    """Employment, Education, Qualification 등 동일한 구조의 소속 데이터를 안전하게 추출"""
+    results = []
     try:
-        person = data.get("person", {}).get("name", {})
-        if person:
-            given = person.get("given-names", {}).get("value", "")
-            family = person.get("family-name", {}).get("value", "")
-            name = f"{given} {family}".strip()
-    except Exception: pass
-
-    # 소속/경력 추출 (세부 정보 추가)
-    employments = []
-    try:
-        emp_groups = data.get("activities-summary", {}).get("employments", {}).get("affiliation-group", [])
-        for group in emp_groups:
-            for summary in group.get("summaries", []):
-                emp = summary.get("employment-summary", {})
-                org = emp.get("organization", {}).get("name", "Unknown Organization")
+        # JSON 값이 null(None)일 경우를 완벽하게 대비하기 위해 or {} 연산자 사용
+        acts = data.get("activities-summary") or {}
+        section = acts.get(activity_type) or {}
+        groups = section.get("affiliation-group") or []
+        
+        for group in groups:
+            summaries = group.get("summaries") or []
+            for summary in summaries:
+                item = summary.get(summary_key) or {}
                 
-                addr = emp.get("organization", {}).get("address", {})
-                city = addr.get("city", "")
-                country = addr.get("country", "")
+                org = item.get("organization") or {}
+                org_name = org.get("name") or "Unknown Organization"
+                
+                addr = org.get("address") or {}
+                city = addr.get("city") or ""
+                country = addr.get("country") or ""
                 location = f"{city}, {country}".strip(", ")
                 if not location: location = "Location Not Available"
                 
-                role = emp.get("role-title", "")
+                role = item.get("role-title") or ""
+                dept = item.get("department-name") or ""
                 
-                # 기간 조합
-                start = emp.get("start-date", {}) or {}
-                start_y = start.get("year", {}).get("value", "") if start.get("year") else ""
-                start_m = start.get("month", {}).get("value", "") if start.get("month") else ""
+                # 학력의 경우 부서(전공)명을 괄호로 묶어서 역할 뒤에 표기
+                if role and dept:
+                    role_display = f"{role} ({dept})"
+                elif dept:
+                    role_display = dept
+                else:
+                    role_display = role
+                
+                start = item.get("start-date") or {}
+                start_y = (start.get("year") or {}).get("value") or ""
+                start_m = (start.get("month") or {}).get("value") or ""
                 start_str = f"{start_y}-{start_m}" if start_m else start_y
                 
-                end = emp.get("end-date", {})
+                end = item.get("end-date") or {}
                 end_str = "present"
                 if end:
-                    end_y = end.get("year", {}).get("value", "") if end.get("year") else ""
-                    end_m = end.get("month", {}).get("value", "") if end.get("month") else ""
+                    end_y = (end.get("year") or {}).get("value") or ""
+                    end_m = (end.get("month") or {}).get("value") or ""
                     end_str = f"{end_y}-{end_m}" if end_m else end_y
                 
                 date_str = f"{start_str} to {end_str}".strip(" to ")
-                source = emp.get("source", {}).get("source-name", {}).get("value", "")
-
-                # 식별자(Identifiers) 추출
-                disambig_org = emp.get("organization", {}).get("disambiguated-organization", {})
-                org_id_source = disambig_org.get("disambiguation-source", "")
-                org_id_value = disambig_org.get("disambiguated-organization-identifier", "")
-
-                # 등록일/수정일 추출
-                created_ms = emp.get("created-date", {}).get("value")
-                added_date = format_date(created_ms)
-                modified_ms = emp.get("last-modified-date", {}).get("value")
-                modified_date = format_date(modified_ms)
                 
-                employments.append({
-                    "org": org, "location": location, "role": role, "date": date_str, "source": source,
-                    "org_id_source": org_id_source, "org_id_value": org_id_value,
-                    "added": added_date, "modified": modified_date
+                source = (item.get("source") or {}).get("source-name", {}).get("value") or ""
+                
+                disambig_org = org.get("disambiguated-organization") or {}
+                org_id_source = disambig_org.get("disambiguation-source") or ""
+                org_id_value = disambig_org.get("disambiguated-organization-identifier") or ""
+                
+                added_date = format_date((item.get("created-date") or {}).get("value"))
+                modified_date = format_date((item.get("last-modified-date") or {}).get("value"))
+                
+                type_label = summary_key.split('-')[0].capitalize() # Employment, Education 등
+                
+                results.append({
+                    "org": org_name, "location": location, "role": role_display, "date": date_str, 
+                    "source": source, "org_id_source": org_id_source, "org_id_value": org_id_value,
+                    "added": added_date, "modified": modified_date, "type": type_label
                 })
-    except Exception: pass
+    except Exception as e:
+        print(f"Error parsing {activity_type}: {e}")
+    return results
 
-    # 연구 성과 추출 (세부 정보 추가)
+def extract_works(data):
+    """연구 성과(Works) 데이터를 안전하게 추출"""
     works = []
     try:
-        work_groups = data.get("activities-summary", {}).get("works", {}).get("group", [])
-        for group in work_groups:
-            for summary in group.get("work-summary", []):
-                title = summary.get("title", {}).get("title", {}).get("value", "Untitled")
-                journal = summary.get("journal-title", {}).get("value", "") if summary.get("journal-title") else ""
-                work_type = summary.get("type", "").replace("-", " ").capitalize()
+        acts = data.get("activities-summary") or {}
+        section = acts.get("works") or {}
+        groups = section.get("group") or []
+        
+        for group in groups:
+            summaries = group.get("work-summary") or []
+            for summary in summaries:
+                title_obj = summary.get("title") or {}
+                title = (title_obj.get("title") or {}).get("value") or "Untitled"
                 
-                pub_date = summary.get("publication-date", {}) or {}
-                pub_y = pub_date.get("year", {}).get("value", "") if pub_date.get("year") else ""
+                journal_obj = summary.get("journal-title") or {}
+                journal = journal_obj.get("value") or ""
+                
+                work_type = (summary.get("type") or "").replace("-", " ").capitalize()
+                
+                pub_date = summary.get("publication-date") or {}
+                pub_y = (pub_date.get("year") or {}).get("value") or ""
                 
                 doi = ""
-                for ext_id in summary.get("external-ids", {}).get("external-id", []):
+                ext_ids = (summary.get("external-ids") or {}).get("external-id") or []
+                for ext_id in ext_ids:
                     if ext_id.get("external-id-type") == "doi":
-                        doi = ext_id.get("external-id-value")
+                        doi = ext_id.get("external-id-value") or ""
                         break
                         
-                source = summary.get("source", {}).get("source-name", {}).get("value", "")
-
-                # 등록일/수정일 추출
-                created_ms = summary.get("created-date", {}).get("value")
-                added_date = format_date(created_ms)
-                modified_ms = summary.get("last-modified-date", {}).get("value")
-                modified_date = format_date(modified_ms)
+                source = (summary.get("source") or {}).get("source-name", {}).get("value") or ""
+                
+                added_date = format_date((summary.get("created-date") or {}).get("value"))
+                modified_date = format_date((summary.get("last-modified-date") or {}).get("value"))
                 
                 works.append({
                     "title": title, "journal": journal, "type": work_type, 
                     "year": pub_y, "doi": doi, "source": source,
                     "added": added_date, "modified": modified_date
                 })
+    except Exception as e:
+        print(f"Error parsing works: {e}")
+    return works
+
+def parse_orcid_metadata(data):
+    # 1. 이름 추출
+    name = "Name Not Available"
+    try:
+        person = data.get("person") or {}
+        name_obj = person.get("name") or {}
+        if name_obj:
+            given = (name_obj.get("given-names") or {}).get("value") or ""
+            family = (name_obj.get("family-name") or {}).get("value") or ""
+            name = f"{given} {family}".strip()
     except Exception: pass
 
-    return {"name": name, "employments": employments, "works": works}
+    # 2. Employment 추출
+    employments = extract_affiliations(data, 'employments', 'employment-summary')
+    
+    # 3. Education & Qualifications 추출 후 통합
+    educations = extract_affiliations(data, 'educations', 'education-summary')
+    qualifications = extract_affiliations(data, 'qualifications', 'qualification-summary')
+    edu_quals = educations + qualifications
+    
+    # 4. Works 추출
+    works = extract_works(data)
+
+    return {
+        "name": name, 
+        "employments": employments, 
+        "edu_quals": edu_quals, 
+        "works": works
+    }
 
 # ==========================================
-# 3. 공통 함수: HTML 렌더링 (자바스크립트 추가)
+# 3. 공통 함수: HTML 동적 렌더링
 # ==========================================
+def render_section_html(title, items, content_id, icon_id):
+    """각 항목(Employment, Education, Works)의 HTML 섹션을 동적으로 생성"""
+    if not items: return ""
+    
+    html = f'''
+        <div style="margin-bottom: 25px;">
+            <div onclick="toggleSection('{content_id}', '{icon_id}')" style="cursor: pointer; background-color: #4a7729; color: white; padding: 12px 15px; font-weight: bold; font-size: 16px; display: flex; justify-content: space-between; align-items: center; border-radius: 3px 3px 0 0;">
+                <span><span id="{icon_id}">&#709;</span> {title} ({len(items)})</span>
+                <span style="font-size: 14px; font-weight: normal;">&#8645; Sort</span>
+            </div>
+            <div id="{content_id}" style="display: block;">
+    '''
+    
+    for item in items:
+        # Affiliation (소속/학력 등)인 경우
+        if 'org' in item: 
+            id_html = ""
+            if item.get('org_id_source') and item.get('org_id_value'):
+                val = item['org_id_value']
+                val_html = f'<a href="{val}" style="color: #0077cc; text-decoration: none;" target="_blank">{val}</a>' if val.startswith('http') else val
+                id_html = f'''
+                    <div style="margin-bottom: 15px;">
+                        <strong>Organization identifiers</strong><br>
+                        {item['org_id_source']}: {val_html}<br>
+                        {item['org']}
+                    </div>
+                '''
+            
+            dates_html = ""
+            if item.get('added'):
+                dates_html += f'<div style="margin-bottom: 15px;"><strong>Added</strong><br>{item["added"]}</div>'
+            if item.get('modified'):
+                dates_html += f'<div style="margin-bottom: 15px;"><strong>Last modified</strong><br>{item["modified"]}</div>'
+
+            details_html = ""
+            if id_html or dates_html:
+                details_html = f'''
+                    <div style="margin-top: 15px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 14px; color: #222;">
+                        {id_html}
+                        {dates_html}
+                    </div>
+                '''
+
+            html += f'''
+                <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div>
+                            <div style="font-weight: bold; font-size: 16px; color: #000;">{item['org']}: {item['location']}</div>
+                            <div style="font-size: 14px; color: #222; margin-top: 8px;">
+                                {item['date']} | {item['role']}<br>
+                                {item['type']}
+                            </div>
+                        </div>
+                        <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
+                    </div>
+                    {details_html}
+                    <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
+                        <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {item['source']}</span>
+                    </div>
+                </div>
+            '''
+        # Works (논문/성과)인 경우
+        else: 
+            work_dates_html = ""
+            if item.get('added'):
+                work_dates_html += f'<div style="margin-bottom: 15px;"><strong>Added</strong><br>{item["added"]}</div>'
+            if item.get('modified'):
+                work_dates_html += f'<div style="margin-bottom: 15px;"><strong>Last modified</strong><br>{item["modified"]}</div>'
+
+            work_details_html = ""
+            if work_dates_html:
+                work_details_html = f'''
+                    <div style="margin-top: 15px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 14px; color: #222;">
+                        {work_dates_html}
+                    </div>
+                '''
+            
+            doi_html = f'<div style="margin-top: 5px;"><strong>DOI:</strong> <a href="https://doi.org/{item["doi"]}" style="color: #0077cc; text-decoration: none;" target="_blank">{item["doi"]}</a></div>' if item.get('doi') else ''
+
+            html += f'''
+                <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div>
+                            <div style="font-weight: bold; font-size: 16px; color: #000;">{item['title']}</div>
+                            <div style="font-size: 14px; color: #222; margin-top: 8px; line-height: 1.5;">
+                                {item['journal']}<br>
+                                {item['year']} | {item['type']}<br>
+                                {doi_html}
+                            </div>
+                        </div>
+                        <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
+                    </div>
+                    {work_details_html}
+                    <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
+                        <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {item['source']}</span>
+                    </div>
+                </div>
+            '''
+            
+    html += '''
+            </div>
+        </div>
+    '''
+    return html
+
 def render_orcid_html(parsed, orcid_id):
-    # JavaScript 로직 (토글 기능)
+    # JavaScript 로직 (다중 섹션 토글 처리 지원)
     js_script = '''
     <script>
         function toggleSection(contentId, iconId) {
@@ -166,10 +314,10 @@ def render_orcid_html(parsed, orcid_id):
             var icon = document.getElementById(iconId);
             if (content.style.display === "none") {
                 content.style.display = "block";
-                icon.innerHTML = "&#709;"; // 아래 화살표
+                icon.innerHTML = "&#709;";
             } else {
                 content.style.display = "none";
-                icon.innerHTML = "&#707;"; // 오른쪽 화살표
+                icon.innerHTML = "&#707;";
             }
         }
 
@@ -178,13 +326,13 @@ def render_orcid_html(parsed, orcid_id):
             var state = btn.innerText === "Collapse all" ? "none" : "block";
             var iconStr = btn.innerText === "Collapse all" ? "&#707;" : "&#709;";
             
-            var empContent = document.getElementById('employment-content');
-            var empIcon = document.getElementById('employment-icon');
-            if(empContent) { empContent.style.display = state; empIcon.innerHTML = iconStr; }
-            
-            var workContent = document.getElementById('works-content');
-            var workIcon = document.getElementById('works-icon');
-            if(workContent) { workContent.style.display = state; workIcon.innerHTML = iconStr; }
+            var sections = ['employment', 'edu-qual', 'works'];
+            sections.forEach(function(sec) {
+                var content = document.getElementById(sec + '-content');
+                var icon = document.getElementById(sec + '-icon');
+                if(content) { content.style.display = state; }
+                if(icon) { icon.innerHTML = iconStr; }
+            });
             
             btn.innerText = state === "none" ? "Expand all" : "Collapse all";
         }
@@ -216,116 +364,14 @@ def render_orcid_html(parsed, orcid_id):
                     <h2 style="font-size: 20px; margin: 0; color: #000;">Activities</h2>
                     <a href="#" id="expand-all-btn" onclick="toggleAll(); return false;" style="color: #0077cc; text-decoration: none; font-size: 14px;">Collapse all</a>
                 </div>
-                
-                <!-- Employment Section -->
-                <div style="margin-bottom: 25px;">
-                    <div onclick="toggleSection('employment-content', 'employment-icon')" style="cursor: pointer; background-color: #4a7729; color: white; padding: 12px 15px; font-weight: bold; font-size: 16px; display: flex; justify-content: space-between; align-items: center; border-radius: 3px 3px 0 0;">
-                        <span><span id="employment-icon">&#709;</span> Employment ({len(parsed['employments'])})</span>
-                        <span style="font-size: 14px; font-weight: normal;">&#8645; Sort</span>
-                    </div>
-                    <div id="employment-content" style="display: block;">
     '''
-    for emp in parsed['employments']:
-        # 기관 식별자 HTML 생성
-        id_html = ""
-        if emp.get('org_id_source') and emp.get('org_id_value'):
-            val = emp['org_id_value']
-            val_html = f'<a href="{val}" style="color: #0077cc; text-decoration: none;" target="_blank">{val}</a>' if val.startswith('http') else val
-            id_html = f'''
-                <div style="margin-bottom: 15px;">
-                    <strong>Organization identifiers</strong><br>
-                    {emp['org_id_source']}: {val_html}<br>
-                    {emp['org']}
-                </div>
-            '''
-        
-        # 날짜 정보 HTML 생성
-        dates_html = ""
-        if emp.get('added'):
-            dates_html += f'<div style="margin-bottom: 15px;"><strong>Added</strong><br>{emp["added"]}</div>'
-        if emp.get('modified'):
-            dates_html += f'<div style="margin-bottom: 15px;"><strong>Last modified</strong><br>{emp["modified"]}</div>'
+    
+    # 각 섹션을 동적으로 합산
+    html_content += render_section_html("Employment", parsed['employments'], 'employment-content', 'employment-icon')
+    html_content += render_section_html("Education and qualifications", parsed['edu_quals'], 'edu-qual-content', 'edu-qual-icon')
+    html_content += render_section_html("Works", parsed['works'], 'works-content', 'works-icon')
 
-        # 세부 정보 합치기
-        details_html = ""
-        if id_html or dates_html:
-            details_html = f'''
-                <div style="margin-top: 15px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 14px; color: #222;">
-                    {id_html}
-                    {dates_html}
-                </div>
-            '''
-
-        html_content += f'''
-                        <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
-                            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                                <div>
-                                    <div style="font-weight: bold; font-size: 16px; color: #000;">{emp['org']}: {emp['location']}</div>
-                                    <div style="font-size: 14px; color: #222; margin-top: 8px;">
-                                        {emp['date']} | {emp['role']}<br>
-                                        Employment
-                                    </div>
-                                </div>
-                                <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
-                            </div>
-                            {details_html}
-                            <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
-                                <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {emp['source']}</span>
-                            </div>
-                        </div>
-        '''
-        
-    html_content += f'''
-                    </div>
-                </div>
-                
-                <!-- Works Section -->
-                <div style="margin-bottom: 25px;">
-                    <div onclick="toggleSection('works-content', 'works-icon')" style="cursor: pointer; background-color: #4a7729; color: white; padding: 12px 15px; font-weight: bold; font-size: 16px; display: flex; justify-content: space-between; align-items: center; border-radius: 3px 3px 0 0;">
-                        <span><span id="works-icon">&#709;</span> Works ({len(parsed['works'])})</span>
-                        <span style="font-size: 14px; font-weight: normal;">&#8645; Sort</span>
-                    </div>
-                    <div id="works-content" style="display: block;">
-    '''
-    for work in parsed['works']:
-        # 연구 성과 날짜 정보 HTML 생성
-        work_dates_html = ""
-        if work.get('added'):
-            work_dates_html += f'<div style="margin-bottom: 15px;"><strong>Added</strong><br>{work["added"]}</div>'
-        if work.get('modified'):
-            work_dates_html += f'<div style="margin-bottom: 15px;"><strong>Last modified</strong><br>{work["modified"]}</div>'
-
-        work_details_html = ""
-        if work_dates_html:
-            work_details_html = f'''
-                <div style="margin-top: 15px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 14px; color: #222;">
-                    {work_dates_html}
-                </div>
-            '''
-
-        html_content += f'''
-                        <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
-                            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                                <div>
-                                    <div style="font-weight: bold; font-size: 16px; color: #000;">{work['title']}</div>
-                                    <div style="font-size: 14px; color: #222; margin-top: 8px; line-height: 1.5;">
-                                        {work['journal']}<br>
-                                        {work['year']} | {work['type']}<br>
-                                        {'<div style="margin-top: 5px;"><strong>DOI:</strong> <a href="https://doi.org/' + work['doi'] + '" style="color: #0077cc; text-decoration: none;" target="_blank">' + work['doi'] + '</a></div>' if work['doi'] else ''}
-                                    </div>
-                                </div>
-                                <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
-                            </div>
-                            {work_details_html}
-                            <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
-                                <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {work['source']}</span>
-                            </div>
-                        </div>
-        '''
-        
     html_content += '''
-                    </div>
-                </div>
             </div>
         </div>
     </div>
@@ -346,7 +392,6 @@ with col2:
 
 st.divider()
 
-# JSON 버튼 클릭 시 동작
 if btn_json:
     if not orcid_id.strip():
         st.warning("ORCID iD를 정확히 입력해 주세요.")
@@ -360,7 +405,6 @@ if btn_json:
             except Exception as e:
                 st.error(f"데이터 수집 중 오류가 발생했습니다: {e}")
 
-# 웹 미리보기 버튼 클릭 시 동작
 if btn_preview:
     if not orcid_id.strip():
         st.warning("ORCID iD를 정확히 입력해 주세요.")
@@ -372,6 +416,6 @@ if btn_preview:
                 preview_html = render_orcid_html(parsed_data, orcid_id)
                 st.success("렌더링 완료!")
                 st.subheader("🌐 ORCID 웹 미리보기")
-                components.html(preview_html, height=1000, scrolling=True)
+                components.html(preview_html, height=1200, scrolling=True)
             except Exception as e:
                 st.error(f"미리보기 생성 중 오류가 발생했습니다: {e}")
