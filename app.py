@@ -1,6 +1,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 import requests
+import datetime
 
 # 페이지 기본 설정
 st.set_page_config(page_title="ORCID 데이터 수집 및 미리보기", page_icon="🔍", layout="wide")
@@ -47,6 +48,14 @@ def fetch_orcid_data(orcid_id):
 # ==========================================
 # 2. 공통 함수: JSON 데이터 파싱
 # ==========================================
+def format_date(timestamp_ms):
+    """ORCID의 ms 단위 타임스탬프를 YYYY-MM-DD 형식으로 변환"""
+    if not timestamp_ms: return ""
+    try:
+        return datetime.datetime.fromtimestamp(int(timestamp_ms) / 1000.0).strftime('%Y-%m-%d')
+    except:
+        return ""
+
 def parse_orcid_metadata(data):
     # 이름 추출
     name = "Name Not Available"
@@ -58,7 +67,7 @@ def parse_orcid_metadata(data):
             name = f"{given} {family}".strip()
     except Exception: pass
 
-    # 소속/경력 추출
+    # 소속/경력 추출 (세부 정보 추가)
     employments = []
     try:
         emp_groups = data.get("activities-summary", {}).get("employments", {}).get("affiliation-group", [])
@@ -75,6 +84,7 @@ def parse_orcid_metadata(data):
                 
                 role = emp.get("role-title", "")
                 
+                # 기간 조합
                 start = emp.get("start-date", {}) or {}
                 start_y = start.get("year", {}).get("value", "") if start.get("year") else ""
                 start_m = start.get("month", {}).get("value", "") if start.get("month") else ""
@@ -89,13 +99,26 @@ def parse_orcid_metadata(data):
                 
                 date_str = f"{start_str} to {end_str}".strip(" to ")
                 source = emp.get("source", {}).get("source-name", {}).get("value", "")
+
+                # 식별자(Identifiers) 추출
+                disambig_org = emp.get("organization", {}).get("disambiguated-organization", {})
+                org_id_source = disambig_org.get("disambiguation-source", "")
+                org_id_value = disambig_org.get("disambiguated-organization-identifier", "")
+
+                # 등록일/수정일 추출
+                created_ms = emp.get("created-date", {}).get("value")
+                added_date = format_date(created_ms)
+                modified_ms = emp.get("last-modified-date", {}).get("value")
+                modified_date = format_date(modified_ms)
                 
                 employments.append({
-                    "org": org, "location": location, "role": role, "date": date_str, "source": source
+                    "org": org, "location": location, "role": role, "date": date_str, "source": source,
+                    "org_id_source": org_id_source, "org_id_value": org_id_value,
+                    "added": added_date, "modified": modified_date
                 })
     except Exception: pass
 
-    # 연구 성과 추출
+    # 연구 성과 추출 (세부 정보 추가)
     works = []
     try:
         work_groups = data.get("activities-summary", {}).get("works", {}).get("group", [])
@@ -115,10 +138,17 @@ def parse_orcid_metadata(data):
                         break
                         
                 source = summary.get("source", {}).get("source-name", {}).get("value", "")
+
+                # 등록일/수정일 추출
+                created_ms = summary.get("created-date", {}).get("value")
+                added_date = format_date(created_ms)
+                modified_ms = summary.get("last-modified-date", {}).get("value")
+                modified_date = format_date(modified_ms)
                 
                 works.append({
                     "title": title, "journal": journal, "type": work_type, 
-                    "year": pub_y, "doi": doi, "source": source
+                    "year": pub_y, "doi": doi, "source": source,
+                    "added": added_date, "modified": modified_date
                 })
     except Exception: pass
 
@@ -161,14 +191,50 @@ def render_orcid_html(parsed, orcid_id):
                     </div>
     '''
     for emp in parsed['employments']:
+        # 기관 식별자 HTML 생성
+        id_html = ""
+        if emp.get('org_id_source') and emp.get('org_id_value'):
+            val = emp['org_id_value']
+            val_html = f'<a href="{val}" style="color: #0077cc; text-decoration: none;" target="_blank">{val}</a>' if val.startswith('http') else val
+            id_html = f'''
+                <div style="margin-bottom: 15px;">
+                    <strong>Organization identifiers</strong><br>
+                    {emp['org_id_source']}: {val_html}<br>
+                    {emp['org']}
+                </div>
+            '''
+        
+        # 날짜 정보 HTML 생성
+        dates_html = ""
+        if emp.get('added'):
+            dates_html += f'<div style="margin-bottom: 15px;"><strong>Added</strong><br>{emp["added"]}</div>'
+        if emp.get('modified'):
+            dates_html += f'<div style="margin-bottom: 15px;"><strong>Last modified</strong><br>{emp["modified"]}</div>'
+
+        # 세부 정보 합치기
+        details_html = ""
+        if id_html or dates_html:
+            details_html = f'''
+                <div style="margin-top: 15px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 14px; color: #222;">
+                    {id_html}
+                    {dates_html}
+                </div>
+            '''
+
         html_content += f'''
                     <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
-                        <div style="font-weight: bold; font-size: 16px; color: #000;">{emp['org']}: {emp['location']}</div>
-                        <div style="font-size: 14px; color: #222; margin-top: 12px;">
-                            {emp['date']} | {emp['role']}<br>
-                            Employment
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                            <div>
+                                <div style="font-weight: bold; font-size: 16px; color: #000;">{emp['org']}: {emp['location']}</div>
+                                <div style="font-size: 14px; color: #222; margin-top: 8px;">
+                                    {emp['date']} | {emp['role']}<br>
+                                    Employment
+                                </div>
+                            </div>
+                            <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
                         </div>
-                        <div style="margin-top: 20px; font-size: 13px; color: #555; border-top: 1px solid #eaeaea; padding-top: 12px; display: flex; align-items: center;">
+                        {details_html}
+                        <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
                             <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {emp['source']}</span>
                         </div>
                     </div>
@@ -185,15 +251,36 @@ def render_orcid_html(parsed, orcid_id):
                     </div>
     '''
     for work in parsed['works']:
+        # 연구 성과 날짜 정보 HTML 생성
+        work_dates_html = ""
+        if work.get('added'):
+            work_dates_html += f'<div style="margin-bottom: 15px;"><strong>Added</strong><br>{work["added"]}</div>'
+        if work.get('modified'):
+            work_dates_html += f'<div style="margin-bottom: 15px;"><strong>Last modified</strong><br>{work["modified"]}</div>'
+
+        work_details_html = ""
+        if work_dates_html:
+            work_details_html = f'''
+                <div style="margin-top: 15px; border-top: 1px solid #ccc; padding-top: 15px; font-size: 14px; color: #222;">
+                    {work_dates_html}
+                </div>
+            '''
+
         html_content += f'''
                     <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
-                        <div style="font-weight: bold; font-size: 16px; color: #000;">{work['title']}</div>
-                        <div style="font-size: 14px; color: #222; margin-top: 12px; line-height: 1.5;">
-                            {work['journal']}<br>
-                            {work['year']} | {work['type']}<br>
-                            {'<div style="margin-top: 5px;"><strong>DOI:</strong> <a href="https://doi.org/' + work['doi'] + '" style="color: #0077cc; text-decoration: none;" target="_blank">' + work['doi'] + '</a></div>' if work['doi'] else ''}
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                            <div>
+                                <div style="font-weight: bold; font-size: 16px; color: #000;">{work['title']}</div>
+                                <div style="font-size: 14px; color: #222; margin-top: 8px; line-height: 1.5;">
+                                    {work['journal']}<br>
+                                    {work['year']} | {work['type']}<br>
+                                    {'<div style="margin-top: 5px;"><strong>DOI:</strong> <a href="https://doi.org/' + work['doi'] + '" style="color: #0077cc; text-decoration: none;" target="_blank">' + work['doi'] + '</a></div>' if work['doi'] else ''}
+                                </div>
+                            </div>
+                            <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
                         </div>
-                        <div style="margin-top: 20px; font-size: 13px; color: #555; border-top: 1px solid #eaeaea; padding-top: 12px; display: flex; align-items: center;">
+                        {work_details_html}
+                        <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
                             <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {work['source']}</span>
                         </div>
                     </div>
@@ -247,6 +334,6 @@ if btn_preview:
                 preview_html = render_orcid_html(parsed_data, orcid_id)
                 st.success("렌더링 완료!")
                 st.subheader("🌐 ORCID 웹 미리보기")
-                components.html(preview_html, height=800, scrolling=True)
+                components.html(preview_html, height=1000, scrolling=True)
             except Exception as e:
                 st.error(f"미리보기 생성 중 오류가 발생했습니다: {e}")
