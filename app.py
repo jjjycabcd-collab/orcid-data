@@ -2,27 +2,31 @@ import streamlit as st
 import requests
 
 # 페이지 기본 설정
-st.set_page_config(page_title="ORCID 정보 조회", page_icon="🔍")
+st.set_page_config(page_title="ORCID 데이터 수집기", page_icon="🔍", layout="wide")
 
-st.title("🔍 ORCID 정보 조회 웹 서비스")
-st.write("ORCID iD를 입력하여 연구자의 공개(Public) 데이터를 조회합니다.")
+st.title("🔍 ORCID Public API 기반 데이터 수집")
+st.markdown("Streamlit Cloud의 `Secrets` 기능을 활용하여 안전하게 데이터를 조회합니다.")
 
-# TODO: 실제 배포 시에는 st.secrets를 사용하여 보안을 강화해야 합니다.
-# 예: CLIENT_ID = st.secrets["ORCID_CLIENT_ID"]
-CLIENT_ID = 'APP-AYX8Q4H9SQSH9EGG'
-CLIENT_SECRET = '05af1a5d-0c23-459c-9ddb-12802ba0634b' # 반드시 재발급 받은 키로 변경하세요!
+# 1. API 키 설정 (보안 적용)
+# 로컬: .streamlit/secrets.toml 에서 로드
+# 클라우드: Streamlit Cloud Settings -> Secrets 에서 로드
+try:
+    CLIENT_ID = st.secrets["ORCID_CLIENT_ID"]
+    CLIENT_SECRET = st.secrets["ORCID_CLIENT_SECRET"]
+except KeyError:
+    st.error("API 키가 설정되지 않았습니다. `.streamlit/secrets.toml` 또는 클라우드 Secrets 설정을 확인해 주세요.")
+    st.stop() # 키가 없으면 앱 실행 중지
 
-# 사용자로부터 ORCID iD 입력받기
-orcid_id = st.text_input("ORCID iD 입력 (예: 0009-0009-9177-9083)", "0009-0009-9177-9083")
+# 2. UI 구성
+orcid_id = st.text_input("수집할 ORCID iD 입력 (형식: xxxx-xxxx-xxxx-xxxx)", "0009-0009-9177-9083")
 
-# 조회 버튼 생성
-if st.button("데이터 조회하기"):
+if st.button("데이터 수집 시작"):
     if not orcid_id.strip():
-        st.warning("ORCID iD를 입력해 주세요.")
+        st.warning("ORCID iD를 정확히 입력해 주세요.")
     else:
-        with st.spinner('ORCID 서버에서 데이터를 불러오는 중입니다...'):
+        with st.spinner("ORCID 서버와 통신 중입니다..."):
             try:
-                # 1. Access Token 발급 (Client Credentials)
+                # 3. Access Token 발급 (Client Credentials 방식)
                 auth_response = requests.post(
                     'https://orcid.org/oauth/token',
                     headers={'Accept': 'application/json'},
@@ -33,26 +37,32 @@ if st.button("데이터 조회하기"):
                         'scope': '/read-public'
                     }
                 )
-                auth_response.raise_for_status() # HTTP 오류 발생 시 예외 처리
+                auth_response.raise_for_status() # HTTP 4xx, 5xx 에러 발생 시 예외 처리
                 access_token = auth_response.json().get('access_token')
 
                 if access_token:
-                    # 2. 특정 ORCID iD 데이터 조회
+                    # 4. 특정 ORCID iD의 전체 레코드 조회
                     headers = {
                         'Accept': 'application/json',
                         'Authorization': f'Bearer {access_token}'
                     }
-                    response = requests.get(f'https://pub.orcid.org/v3.0/{orcid_id}', headers=headers)
+                    
+                    # API v3.0 Endpoint 호출
+                    api_url = f'https://pub.orcid.org/v3.0/{orcid_id}'
+                    response = requests.get(api_url, headers=headers)
                     response.raise_for_status()
+                    
                     data = response.json()
 
-                    st.success("데이터 조회가 완료되었습니다!")
+                    st.success("데이터 수집이 완료되었습니다!")
                     
-                    # 3. 수집된 데이터를 예쁘게 출력
-                    st.subheader("전체 데이터 (JSON)")
+                    # 5. 수집된 JSON 데이터 출력
+                    st.subheader("수집된 원본 메타데이터")
                     st.json(data)
                 else:
-                    st.error("Access Token 발급에 실패했습니다. API 키를 확인해 주세요.")
+                    st.error("Access Token 발급에 실패했습니다.")
                     
-            except requests.exceptions.RequestException as e:
-                st.error(f"API 요청 중 오류가 발생했습니다: {e}")
+            except requests.exceptions.HTTPError as http_err:
+                st.error(f"서버 통신 오류가 발생했습니다: {http_err}")
+            except Exception as err:
+                st.error(f"예기치 못한 오류가 발생했습니다: {err}")
