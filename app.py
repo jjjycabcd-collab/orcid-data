@@ -155,10 +155,44 @@ def parse_orcid_metadata(data):
     return {"name": name, "employments": employments, "works": works}
 
 # ==========================================
-# 3. 공통 함수: HTML 렌더링
+# 3. 공통 함수: HTML 렌더링 (자바스크립트 추가)
 # ==========================================
 def render_orcid_html(parsed, orcid_id):
+    # JavaScript 로직 (토글 기능)
+    js_script = '''
+    <script>
+        function toggleSection(contentId, iconId) {
+            var content = document.getElementById(contentId);
+            var icon = document.getElementById(iconId);
+            if (content.style.display === "none") {
+                content.style.display = "block";
+                icon.innerHTML = "&#709;"; // 아래 화살표
+            } else {
+                content.style.display = "none";
+                icon.innerHTML = "&#707;"; // 오른쪽 화살표
+            }
+        }
+
+        function toggleAll() {
+            var btn = document.getElementById('expand-all-btn');
+            var state = btn.innerText === "Collapse all" ? "none" : "block";
+            var iconStr = btn.innerText === "Collapse all" ? "&#707;" : "&#709;";
+            
+            var empContent = document.getElementById('employment-content');
+            var empIcon = document.getElementById('employment-icon');
+            if(empContent) { empContent.style.display = state; empIcon.innerHTML = iconStr; }
+            
+            var workContent = document.getElementById('works-content');
+            var workIcon = document.getElementById('works-icon');
+            if(workContent) { workContent.style.display = state; workIcon.innerHTML = iconStr; }
+            
+            btn.innerText = state === "none" ? "Expand all" : "Collapse all";
+        }
+    </script>
+    '''
+
     html_content = f'''
+    {js_script}
     <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; max-width: 1000px; margin: auto; background: #fff; border: 1px solid #ddd; border-radius: 4px;">
         <!-- 상단 헤더 -->
         <div style="background-color: #002b36; color: white; padding: 30px;">
@@ -180,15 +214,16 @@ def render_orcid_html(parsed, orcid_id):
             <div style="width: 75%;">
                 <div style="display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 15px;">
                     <h2 style="font-size: 20px; margin: 0; color: #000;">Activities</h2>
-                    <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Expand all</a>
+                    <a href="#" id="expand-all-btn" onclick="toggleAll(); return false;" style="color: #0077cc; text-decoration: none; font-size: 14px;">Collapse all</a>
                 </div>
                 
                 <!-- Employment Section -->
                 <div style="margin-bottom: 25px;">
-                    <div style="background-color: #4a7729; color: white; padding: 12px 15px; font-weight: bold; font-size: 16px; display: flex; justify-content: space-between; align-items: center; border-radius: 3px 3px 0 0;">
-                        <span>&#709; Employment ({len(parsed['employments'])})</span>
-                        <span style="font-size: 14px; cursor: pointer; font-weight: normal;">&#8645; Sort</span>
+                    <div onclick="toggleSection('employment-content', 'employment-icon')" style="cursor: pointer; background-color: #4a7729; color: white; padding: 12px 15px; font-weight: bold; font-size: 16px; display: flex; justify-content: space-between; align-items: center; border-radius: 3px 3px 0 0;">
+                        <span><span id="employment-icon">&#709;</span> Employment ({len(parsed['employments'])})</span>
+                        <span style="font-size: 14px; font-weight: normal;">&#8645; Sort</span>
                     </div>
+                    <div id="employment-content" style="display: block;">
     '''
     for emp in parsed['employments']:
         # 기관 식별자 HTML 생성
@@ -222,33 +257,35 @@ def render_orcid_html(parsed, orcid_id):
             '''
 
         html_content += f'''
-                    <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                            <div>
-                                <div style="font-weight: bold; font-size: 16px; color: #000;">{emp['org']}: {emp['location']}</div>
-                                <div style="font-size: 14px; color: #222; margin-top: 8px;">
-                                    {emp['date']} | {emp['role']}<br>
-                                    Employment
+                        <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                                <div>
+                                    <div style="font-weight: bold; font-size: 16px; color: #000;">{emp['org']}: {emp['location']}</div>
+                                    <div style="font-size: 14px; color: #222; margin-top: 8px;">
+                                        {emp['date']} | {emp['role']}<br>
+                                        Employment
+                                    </div>
                                 </div>
+                                <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
                             </div>
-                            <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
+                            {details_html}
+                            <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
+                                <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {emp['source']}</span>
+                            </div>
                         </div>
-                        {details_html}
-                        <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
-                            <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {emp['source']}</span>
-                        </div>
-                    </div>
         '''
         
     html_content += f'''
+                    </div>
                 </div>
                 
                 <!-- Works Section -->
                 <div style="margin-bottom: 25px;">
-                    <div style="background-color: #4a7729; color: white; padding: 12px 15px; font-weight: bold; font-size: 16px; display: flex; justify-content: space-between; align-items: center; border-radius: 3px 3px 0 0;">
-                        <span>&#709; Works ({len(parsed['works'])})</span>
-                        <span style="font-size: 14px; cursor: pointer; font-weight: normal;">&#8645; Sort</span>
+                    <div onclick="toggleSection('works-content', 'works-icon')" style="cursor: pointer; background-color: #4a7729; color: white; padding: 12px 15px; font-weight: bold; font-size: 16px; display: flex; justify-content: space-between; align-items: center; border-radius: 3px 3px 0 0;">
+                        <span><span id="works-icon">&#709;</span> Works ({len(parsed['works'])})</span>
+                        <span style="font-size: 14px; font-weight: normal;">&#8645; Sort</span>
                     </div>
+                    <div id="works-content" style="display: block;">
     '''
     for work in parsed['works']:
         # 연구 성과 날짜 정보 HTML 생성
@@ -267,26 +304,27 @@ def render_orcid_html(parsed, orcid_id):
             '''
 
         html_content += f'''
-                    <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
-                        <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                            <div>
-                                <div style="font-weight: bold; font-size: 16px; color: #000;">{work['title']}</div>
-                                <div style="font-size: 14px; color: #222; margin-top: 8px; line-height: 1.5;">
-                                    {work['journal']}<br>
-                                    {work['year']} | {work['type']}<br>
-                                    {'<div style="margin-top: 5px;"><strong>DOI:</strong> <a href="https://doi.org/' + work['doi'] + '" style="color: #0077cc; text-decoration: none;" target="_blank">' + work['doi'] + '</a></div>' if work['doi'] else ''}
+                        <div style="border: 1px solid #ccc; border-top: none; padding: 20px; background: #fafafa;">
+                            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                                <div>
+                                    <div style="font-weight: bold; font-size: 16px; color: #000;">{work['title']}</div>
+                                    <div style="font-size: 14px; color: #222; margin-top: 8px; line-height: 1.5;">
+                                        {work['journal']}<br>
+                                        {work['year']} | {work['type']}<br>
+                                        {'<div style="margin-top: 5px;"><strong>DOI:</strong> <a href="https://doi.org/' + work['doi'] + '" style="color: #0077cc; text-decoration: none;" target="_blank">' + work['doi'] + '</a></div>' if work['doi'] else ''}
+                                    </div>
                                 </div>
+                                <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
                             </div>
-                            <a href="#" style="color: #0077cc; text-decoration: none; font-size: 14px;">Show less detail</a>
+                            {work_details_html}
+                            <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
+                                <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {work['source']}</span>
+                            </div>
                         </div>
-                        {work_details_html}
-                        <div style="margin-top: 15px; font-size: 13px; color: #555; border-top: 1px solid #ccc; padding-top: 12px; display: flex; align-items: center;">
-                            <strong>Source:</strong> &nbsp; <span style="display: inline-flex; align-items: center; gap: 5px;"><div style="width: 16px; height: 16px; background-color: #a6ce39; border-radius: 50%; color: white; text-align: center; line-height: 16px; font-size: 10px;">iD</div> {work['source']}</span>
-                        </div>
-                    </div>
         '''
         
     html_content += '''
+                    </div>
                 </div>
             </div>
         </div>
